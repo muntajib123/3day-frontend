@@ -1,38 +1,80 @@
-.App {
-  text-align: center;
+/* src/App.css - minimal resets + layout helpers */
+
+:root {
+  --topbar-height: 70px;
+  --page-bg: #f6f7fb;
+  --topbar-bg: #0b1e39;
+  --content-padding: 20px;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+/* basic reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--page-bg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
 }
 
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
+/* top bar */
+.topbar {
+  height: var(--topbar-height);
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+  justify-content: space-between;
+  padding: 0 var(--content-padding);
+  background: var(--topbar-bg);
   color: white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
 }
 
-.App-link {
-  color: #61dafb;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.brand-logo {
+  width: 40px;
+  height: 40px;
+}
+
+.brand-title {
+  font-weight: 600;
+  font-size: 18px;
+}
+
+.page-title {
+  font-size: 18px;
+  font-weight: 500;
+  margin: 0;
+}
+
+/* main content area — use full viewport width (so charts can expand
+   even when DevTools is docked). Padding keeps comfortable margins. */
+.app-main {
+  width: 100vw;            /* full viewport width */
+  max-width: 100%;
+  margin: 20px 0;
+  padding: 0 var(--content-padding);
+  overflow-x: hidden;
+}
+
+/* center the ForecastDashboard contents (cards and charts will center inside) */
+.app-main > * {
+  max-width: 1400px;   /* maximum content width, increase if you want wider charts */
+  margin: 0 auto;
+}
+
+/* small responsive tweak to avoid horizontal scroll at narrow widths */
+@media (max-width: 600px) {
+  .app-main { padding: 0 12px; }
+  .page-title { font-size: 16px; }
 }
