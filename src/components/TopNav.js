@@ -1,6 +1,6 @@
 // src/components/TopNav.js
 import React from "react";
-import { AppBar, Toolbar, Typography } from "@mui/material";
+import { AppBar, Toolbar, Typography, Box } from "@mui/material";
 
 export default function TopNav() {
   return (
@@ -13,16 +13,31 @@ export default function TopNav() {
         background: "#fff",
       }}
     >
-      <Toolbar sx={{ display: "flex", justifyContent: "space-between" }}>
-        {/* Logo / Title */}
+      <Toolbar sx={{ display: "flex", justifyContent: "flex-start" }}>
+        
+        {/* CoralComp Logo */}
+        <Box
+          component="img"
+          src="/images/coralcomp-logo.png"   // <-- Put your logo in public/images/
+          alt="CoralComp Logo"
+          sx={{
+            width: 38,
+            height: 38,
+            borderRadius: 1,
+            mr: 1.2,
+          }}
+        />
+
+        {/* Title */}
         <Typography
           variant="h6"
           noWrap
           component="div"
           sx={{ fontWeight: 700, color: "#1976d2" }}
         >
-          🌌 Space Weather Forecast
+          CoralComp Space Weather Forecast
         </Typography>
+
       </Toolbar>
     </AppBar>
   );

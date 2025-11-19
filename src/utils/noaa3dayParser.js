@@ -7,14 +7,21 @@ const MONTHS = {
 };
 
 function pad2(n) { return String(n).padStart(2, "0"); }
+
 function dayKeyUTC(date) {
+  // date: JS Date (assumed UTC)
   return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+}
+
+function toISOKeyFromTuple(year, mon, day) {
+  const d = new Date(Date.UTC(year, mon, day, 0, 0, 0));
+  return dayKeyUTC(d);
 }
 
 // ====== parseNoaa3Day (Kp text) ======
 export function parseNoaa3Day(text) {
   if (!text || typeof text !== "string") {
-    return { meta: {}, summary: {}, kpBreakdown: [], days: [], daysISO: [], kpSeries: [] };
+    return { meta: {}, summary: {}, kpBreakdown: [], daysLabel: [], daysISO: [], kpSeries: [] };
   }
   const clean = text.replace(/\r/g, "");
   const lines = clean.split("\n");
@@ -39,7 +46,7 @@ export function parseNoaa3Day(text) {
   // Find "Kp index breakdown ..." (NOAA sometimes omits the leading "NOAA")
   const kpTitleIdx = lines.findIndex((l) => /Kp index breakdown/i.test(l));
   if (kpTitleIdx === -1) {
-    return { meta, summary, kpBreakdown: [], days: [], daysISO: [], kpSeries: [] };
+    return { meta, summary, kpBreakdown: [], daysLabel: [], daysISO: [], kpSeries: [] };
   }
   const titleLine = lines[kpTitleIdx];
   let breakdownYear = null;
@@ -56,7 +63,8 @@ export function parseNoaa3Day(text) {
   while (headerRow < lines.length && !lines[headerRow].trim()) headerRow++;
   const dayHeaderLine = lines[headerRow] || "";
 
-  const days = dayHeaderLine
+  // Extract short labels (e.g. "Oct 23")
+  const daysLabel = dayHeaderLine
     .split(/\s{2,}/)
     .map((s) => s.trim())
     .filter(Boolean)
@@ -64,12 +72,13 @@ export function parseNoaa3Day(text) {
     .slice(0, 3);
 
   // Parse months/days + handle Dec->Jan rollover
-  const dayTuples = days.map((dStr) => {
+  const dayTuples = daysLabel.map((dStr) => {
     const m = dStr.match(/^([A-Za-z]{3})\s+(\d{1,2})$/);
     if (!m) return null;
     return { mon: MONTHS[m[1]], day: Number(m[2]), label: dStr, yOffset: 0 };
   });
 
+  // handle year rollover across Dec->Jan in the day labels
   for (let i = 1; i < dayTuples.length; i++) {
     const prev = dayTuples[i - 1], cur = dayTuples[i];
     if (prev && cur && prev.mon === 11 && cur.mon === 0) {
@@ -78,13 +87,21 @@ export function parseNoaa3Day(text) {
     }
   }
 
+  // Build daysISO (YYYY-MM-DD) aligned with daysLabel order
   const daysISO = dayTuples
     .filter(Boolean)
     .map((t) => {
       const y = breakdownYear + (t.yOffset || 0);
-      const d = new Date(Date.UTC(y, t.mon, t.day, 0, 0, 0));
-      return dayKeyUTC(d);
+      return toISOKeyFromTuple(y, t.mon, t.day);
     });
+
+  // Build a mapping label -> ISO key for later use
+  const labelToISO = {};
+  dayTuples.forEach((t, idx) => {
+    if (!t) return;
+    const iso = daysISO[idx];
+    labelToISO[t.label] = iso;
+  });
 
   // Build the Kp table rows
   const kpBreakdown = [];
@@ -96,11 +113,15 @@ export function parseNoaa3Day(text) {
     const m = row.match(/^(\d{2}-\d{2})UT\s+(.+)$/i);
     if (!m) continue;
     const hourBlock = m[1];
+    // split on two or more spaces to preserve possible single-space tokens
     const vals = m[2].trim().split(/\s{2,}/).map((v) => v.trim());
     const entry = { hourBlock };
-    days.forEach((d, idx) => {
-      const v = Number(vals[idx]);
-      entry[d] = Number.isFinite(v) ? v : null;
+    // Map values to ISO keys (not to original labels) so frontend can use calendar keys
+    daysLabel.forEach((d, idx) => {
+      const vRaw = vals[idx];
+      const v = vRaw == null || vRaw === "" ? null : Number(vRaw);
+      const isoKey = labelToISO[d];
+      entry[isoKey] = Number.isFinite(v) ? v : null;
     });
     kpBreakdown.push(entry);
   }
@@ -115,31 +136,22 @@ export function parseNoaa3Day(text) {
   dayTuples.forEach((t, dayIndex) => {
     if (!t) return;
     const y = breakdownYear + (t.yOffset || 0);
+    const isoDay = toISOKeyFromTuple(y, t.mon, t.day); // YYYY-MM-DD
     kpBreakdown.forEach((row) => {
       const h = hourStart(row.hourBlock);
       if (h == null) return;
-      const kp = row[t.label];
+      const kp = row[isoDay];
       if (kp == null) return;
       const iso = new Date(Date.UTC(y, t.mon, t.day, h, 0, 0)).toISOString();
       kpSeries.push({ iso, kp: Number(kp), dayIndex });
     });
   });
 
-  return { meta, summary, kpBreakdown, days, daysISO, kpSeries };
+  return { meta, summary, kpBreakdown, daysLabel, daysISO, kpSeries };
 }
 
 // ====== Probability parsing (Solar/Radio) ======
 // Robust parser that reads the two sections inside the MAIN 3-day text.
-// Example blocks it supports (your sample):
-//
-// Solar Radiation Storm Forecast for Oct 29-Oct 31 2025
-//               Oct 29  Oct 30  Oct 31
-// S1 or greater    1%      1%      1%
-//
-// Radio Blackout Forecast for Oct 29-Oct 31 2025
-//               Oct 29        Oct 30        Oct 31
-// R1-R2            5%            5%            5%
-// R3 or greater    1%            1%            1%
 
 function parseDaysAfter(lines, startIdx, fallbackYear) {
   // find the line with the three day tokens
@@ -246,7 +258,7 @@ export function parseNoaaProbabilities(text, fallbackYear, daysHintISO = []) {
     }
   }
 
-  // If we still don't have daysISO from sections, trust Kp days
+  // If we still don't have daysISO from sections, trust daysHintISO
   if (!(Array.isArray(daysISO) && daysISO.length === 3) &&
       Array.isArray(daysHintISO) && daysHintISO.length === 3) {
     daysISO = [...daysHintISO];

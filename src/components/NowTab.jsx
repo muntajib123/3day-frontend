@@ -1,5 +1,5 @@
 // src/components/NowTab.jsx
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   Box, Card, CardContent, Typography, IconButton, Chip,
   Stack, Divider, Tooltip, CircularProgress
@@ -18,7 +18,7 @@ const fmtTime = (iso) =>
   new Date(iso).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
 const fmtDayUTC = (iso) => new Date(iso).toLocaleString([], { day: "2-digit", month: "short" });
 const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + Number(b || 0), 0) / arr.length : 0);
-const fmtKp = (n) => (Number.isFinite(n) ? n.toFixed(2) : "—");
+const fmtKp = (n) => (Number.isFinite(n) ? Number(n).toFixed(2) : "—");
 
 function kpToAp(kp) {
   const table = [0, 4, 7, 15, 27, 48, 80, 132, 207, 400];
@@ -41,20 +41,17 @@ export default function NowTab() {
     setLoading(true);
     setErr("");
     try {
-      // 🔹 Fetch the SINGLE main bulletin
       const txt = await fetch(NOAA_3DAY_URL).then((r) => {
-        if (!r.ok) throw new Error("NOAA 3-day fetch failed");
+        if (!r.ok) throw new Error("3-day fetch failed");
         return r.text();
       });
 
-      // 🔹 Parse Kp/Ap
       const kpParsed = parseNoaa3Day(txt);
       const kpSer = (kpParsed.kpSeries || []).sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso));
       setDaysISO(kpParsed.daysISO || []);
       setKpSeries(kpSer);
       setIssued(kpParsed?.meta?.issued || "");
 
-      // 🔹 Parse Solar/Radio from the SAME file
       const fallbackYear =
         (kpParsed?.meta?.issued && (kpParsed.meta.issued.match(/(\d{4})/) || [])[1]) ||
         new Date().getUTCFullYear();
@@ -64,7 +61,7 @@ export default function NowTab() {
       setRadioByDay(prob.radioByDay || new Map());
     } catch (e) {
       console.error(e);
-      setErr("Failed to load NOAA live 3-day forecast.");
+      setErr("Failed to load live 3-day forecast.");
     } finally {
       setLoading(false);
     }
@@ -137,7 +134,7 @@ export default function NowTab() {
         <CardContent>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              Present — Live NOAA 3-Day Space Weather Forecast
+              Present — Live 3-Day Space Weather Forecast
             </Typography>
             <Stack direction="row" alignItems="center" spacing={1}>
               {issued && <Chip size="small" label={`Issued: ${issued}`} />}
@@ -160,7 +157,7 @@ export default function NowTab() {
           ) : err ? (
             <Typography color="error">{err}</Typography>
           ) : !daysISO.length ? (
-            <Typography>No live NOAA forecast found.</Typography>
+            <Typography>No live forecast found.</Typography>
           ) : (
             <>
               {/* Day cards */}

@@ -30,10 +30,14 @@ import {
 } from "recharts";
 import { parseISO, format } from "date-fns";
 import fetchPredictions from "../api";
+import { parseNoaa3Day } from "../utils/noaa3dayParser";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
-/* ---------- helpers: PNG/PDF downloads ---------- */
+// ----- NOAA 3-day text endpoint (same as NowTab uses) -----
+const NOAA_3DAY_URL = "/noaa/text/3-day-forecast.txt";
+
+/* ---------- helpers: PNG/PDF downloads (unchanged) ---------- */
 async function downloadPNGFromRef(ref, filename = "chart.png") {
   if (!ref?.current) return;
   const canvas = await html2canvas(ref.current, { useCORS: true, scale: 2 });
@@ -61,6 +65,7 @@ export default function ForecastDashboard() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [presentDays, setPresentDays] = useState([]); // NOAA days (YYYY-MM-DD)
 
   const kpRef = useRef(null);
   const apRef = useRef(null);
@@ -98,6 +103,8 @@ export default function ForecastDashboard() {
           })
           .filter((r) => r.dt && !Number.isNaN(r.dt.getTime()))
           .sort((a, b) => a.dt - b.dt);
+        console.log("ForecastDashboard: loaded predictions rows count:", normalized.length);
+        console.log("ForecastDashboard: sample normalized rows (first 6):", normalized.slice(0, 6));
         setRows(normalized);
       })
       .catch((err) => {
@@ -105,6 +112,27 @@ export default function ForecastDashboard() {
         setError(err?.response?.data ?? err.message ?? String(err));
       })
       .finally(() => setLoading(false));
+  }, []);
+
+  /* -------- fetch NOAA present days so we can exclude them from Future -------- */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(NOAA_3DAY_URL);
+        if (!resp.ok) throw new Error("No NOAA 3-day text available");
+        const txt = await resp.text();
+        const parsed = parseNoaa3Day(txt);
+        // parser returns daysISO (YYYY-MM-DD)
+        const daysISO = parsed?.daysISO ?? parsed?.daysISO ?? [];
+        console.log("ForecastDashboard: parsed NOAA daysISO:", daysISO);
+        if (!cancelled) setPresentDays(Array.isArray(daysISO) ? daysISO : []);
+      } catch (e) {
+        console.warn("ForecastDashboard: could not fetch NOAA 3-day text:", e?.message || e);
+        if (!cancelled) setPresentDays([]);
+      }
+    })();
+    return () => (cancelled = true);
   }, []);
 
   /* -------- group by date -------- */
@@ -116,7 +144,9 @@ export default function ForecastDashboard() {
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(r);
     });
-    return Array.from(map.entries()).map(([date, items]) => ({ date, items }));
+    const arr = Array.from(map.entries()).map(([date, items]) => ({ date, items }));
+    console.log("ForecastDashboard: groupedByDate keys:", arr.map((g) => g.date));
+    return arr;
   }, [rows]);
 
   /* -------- compute Ap daily from Kp if missing -------- */
@@ -130,12 +160,61 @@ export default function ForecastDashboard() {
     return m;
   }, [groupedByDate]);
 
-  /* -------- limit charts to same 3 visible days as cards -------- */
-  const visibleDates = useMemo(() => groupedByDate.slice(0, 3).map((g) => g.date), [groupedByDate]);
+  /* -------- compute visibleDates (EXCLUDE presentDays) with debug logs -------- */
+  const visibleDates = useMemo(() => {
+    console.log("ForecastDashboard: computing visibleDates, presentDays:", presentDays);
+    if (!groupedByDate.length) return [];
+
+    if (presentDays && presentDays.length) {
+      const out = [];
+      for (const g of groupedByDate) {
+        if (!presentDays.includes(g.date)) {
+          out.push(g.date);
+          if (out.length >= 3) break;
+        } else {
+          console.log("ForecastDashboard: excluding date because NOAA presentDays contains it:", g.date);
+        }
+      }
+      if (out.length) {
+        console.log("ForecastDashboard: visibleDates (after excluding NOAA):", out);
+        return out;
+      }
+    }
+
+    // fallback logic
+    const todayUTC = new Date();
+    const todayKey = format(todayUTC, "yyyy-MM-dd");
+    console.log("ForecastDashboard: fallback todayKey:", todayKey);
+
+    const startIndex = groupedByDate.findIndex((g) => g.date > todayKey);
+    if (startIndex !== -1) {
+      const res = groupedByDate.slice(startIndex, startIndex + 3).map((g) => g.date);
+      console.log("ForecastDashboard: visibleDates (strictly after today):", res);
+      return res;
+    }
+
+    const todayIndex = groupedByDate.findIndex((g) => g.date === todayKey);
+    if (todayIndex !== -1 && todayIndex + 1 < groupedByDate.length) {
+      const res = groupedByDate.slice(todayIndex + 1, todayIndex + 4).map((g) => g.date);
+      console.log("ForecastDashboard: visibleDates (after today index fallback):", res);
+      return res;
+    }
+
+    const res = groupedByDate.slice(0, 3).map((g) => g.date);
+    console.log("ForecastDashboard: visibleDates (final fallback):", res);
+    return res;
+  }, [groupedByDate, presentDays]);
+
+  /* -------- rows used for charts/cards -------- */
   const visibleChartRows = useMemo(
     () => rows.filter((r) => visibleDates.includes(format(r.dt, "yyyy-MM-dd"))),
     [rows, visibleDates]
   );
+
+  useEffect(() => {
+    console.log("ForecastDashboard: visibleChartRows count:", visibleChartRows.length);
+    console.log("ForecastDashboard: visibleChartRows sample (first 8):", visibleChartRows.slice(0, 8));
+  }, [visibleChartRows]);
 
   const chartData = useMemo(
     () =>
@@ -161,7 +240,7 @@ export default function ForecastDashboard() {
     };
   }, [visibleChartRows]);
 
-  // 🔑 generate key for Recharts containers so they remount correctly
+  // generate key for recharts remounts
   const rechartsKey = useMemo(() => {
     if (!rows.length) return "empty";
     const first = rows[0]?.dt?.toISOString?.() ?? "";
@@ -186,64 +265,56 @@ export default function ForecastDashboard() {
 
   return (
     <Box sx={{ py: { xs: 2, md: 4 } }}>
-      {/* ===================== TOP SECTIONS ===================== */}
       <Container maxWidth="xl">
-        {/* ---------- Day cards ---------- */}
         <Grid container spacing={5} justifyContent="center" sx={{ mb: 6 }}>
-          {groupedByDate.slice(0, 3).map((g) => {
-            const items = g.items;
-            const kp_value = items[0]?.kp ?? null;
-            const ap_value = items.find((x) => x.ap != null)?.ap ?? apMap.get(g.date) ?? null;
-            const solar_max = items.reduce((m, x) => (x.solar != null ? Math.max(m, x.solar) : m), -Infinity);
-            const radio_max = items.reduce((m, x) => (x.radio != null ? Math.max(m, x.radio) : m), -Infinity);
-            const label = format(parseISO(g.date + "T00:00:00"), "EEE, MMM d");
+          {groupedByDate
+            .filter((g) => visibleDates.includes(g.date))
+            .map((g) => {
+              const items = g.items;
+              const kpVals = items.map((i) => i.kp).filter((v) => v != null && !Number.isNaN(v));
+              const kp_value = kpVals.length ? kpVals.reduce((s, v) => s + v, 0) / kpVals.length : null;
+              const ap_value = items.find((x) => x.ap != null)?.ap ?? apMap.get(g.date) ?? null;
+              const solar_max = items.reduce((m, x) => (x.solar != null ? Math.max(m, x.solar) : m), -Infinity);
+              const radio_max = items.reduce((m, x) => (x.radio != null ? Math.max(m, x.radio) : m), -Infinity);
+              const label = format(parseISO(g.date + "T00:00:00"), "EEE, MMM d");
 
-            return (
-              <Grid item xs={12} sm={10} md={6} lg={4} key={g.date}>
-                <Card
-                  sx={{
-                    height: "100%",
-                    borderRadius: 4,
-                    boxShadow: "0 10px 30px rgba(15,23,42,0.06)",
-                    background: "#fff",
-                  }}
-                  variant="outlined"
-                >
-                  <CardContent sx={{ py: 3.5, px: { xs: 3, md: 4 } }}>
-                    <Typography variant="subtitle1" color="text.secondary" sx={{ mb: 1 }}>
-                      {label}
-                    </Typography>
-                    <Box sx={{ display: "grid", gap: 0.5 }}>
-                      <Typography sx={{ fontSize: 28, fontWeight: 800 }}>
-                        Kp: {Number.isFinite(kp_value) ? kp_value.toFixed(2) : "—"}
+              return (
+                <Grid item xs={12} sm={10} md={6} lg={4} key={g.date}>
+                  <Card sx={{ height: "100%", borderRadius: 4, boxShadow: "0 10px 30px rgba(15,23,42,0.06)", background: "#fff" }} variant="outlined">
+                    <CardContent sx={{ py: 3.5, px: { xs: 3, md: 4 } }}>
+                      <Typography variant="subtitle1" color="text.secondary" sx={{ mb: 1 }}>
+                        {label}
                       </Typography>
-                      <Typography sx={{ fontSize: 22, fontWeight: 700, color: "text.primary" }}>
-                        Ap: {ap_value != null ? ap_value.toFixed(2) : "—"}
-                      </Typography>
-                    </Box>
-                    <Divider sx={{ my: 2.5 }} />
-                    <Grid container spacing={2}>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="text.secondary">Solar</Typography>
-                        <Typography sx={{ fontWeight: 800, fontSize: 18 }}>
-                          {Number.isFinite(solar_max) ? `${solar_max.toFixed(0)}%` : "—"}
+                      <Box sx={{ display: "grid", gap: 0.5 }}>
+                        <Typography sx={{ fontSize: 28, fontWeight: 800 }}>
+                          Kp: {Number.isFinite(kp_value) ? kp_value.toFixed(2) : "—"}
                         </Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="text.secondary">Radio</Typography>
-                        <Typography sx={{ fontWeight: 800, fontSize: 18 }}>
-                          {Number.isFinite(radio_max) ? `${radio_max.toFixed(0)}%` : "—"}
+                        <Typography sx={{ fontSize: 22, fontWeight: 700, color: "text.primary" }}>
+                          Ap: {ap_value != null ? ap_value.toFixed(2) : "—"}
                         </Typography>
+                      </Box>
+                      <Divider sx={{ my: 2.5 }} />
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary">Solar</Typography>
+                          <Typography sx={{ fontWeight: 800, fontSize: 18 }}>
+                            {Number.isFinite(solar_max) ? `${solar_max.toFixed(0)}%` : "—"}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Typography variant="caption" color="text.secondary">Radio</Typography>
+                          <Typography sx={{ fontWeight: 800, fontSize: 18 }}>
+                            {Number.isFinite(radio_max) ? `${radio_max.toFixed(0)}%` : "—"}
+                          </Typography>
+                        </Grid>
                       </Grid>
-                    </Grid>
-                  </CardContent>
-                </Card>
-              </Grid>
-            );
-          })}
+                    </CardContent>
+                  </Card>
+                </Grid>
+              );
+            })}
         </Grid>
 
-        {/* KPI tiles */}
         <Grid container spacing={4} justifyContent="center" sx={{ mb: 8 }}>
           <Grid item xs={10} sm={6} md={4} lg={3}>
             <Paper sx={{ py: 3.5, textAlign: "center", background: "#ffe9ea", borderRadius: 3 }}>
@@ -269,10 +340,8 @@ export default function ForecastDashboard() {
         </Grid>
       </Container>
 
-      {/* ===================== CHARTS ===================== */}
       <Box sx={{ mt: 2 }}>
         <Container maxWidth="xl">
-          {/* Kp chart */}
           <Paper ref={kpRef} sx={{ p: 3, mb: 5, borderRadius: 3 }}>
             <Stack direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
               <Typography variant="h6">Kp Index</Typography>
@@ -295,7 +364,6 @@ export default function ForecastDashboard() {
             </Box>
           </Paper>
 
-          {/* Ap chart */}
           <Paper ref={apRef} sx={{ p: 3, mb: 5, borderRadius: 3 }}>
             <Stack direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
               <Typography variant="h6">Ap (daily avg of Kp)</Typography>
@@ -317,7 +385,6 @@ export default function ForecastDashboard() {
             </Box>
           </Paper>
 
-          {/* Solar chart */}
           <Paper ref={solarRef} sx={{ p: 3, mb: 5, borderRadius: 3 }}>
             <Stack direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
               <Typography variant="h6">Solar Radiation (%)</Typography>
@@ -339,7 +406,6 @@ export default function ForecastDashboard() {
             </Box>
           </Paper>
 
-          {/* Radio chart */}
           <Paper ref={radioRef} sx={{ p: 3, mb: 7, borderRadius: 3 }}>
             <Stack direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
               <Typography variant="h6">Radio Blackout (%)</Typography>

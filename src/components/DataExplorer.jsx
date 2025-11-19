@@ -5,7 +5,7 @@ import { Box, Tabs, Tab, Paper, Stack, Button } from "@mui/material";
 // PRESENT: use the new NowTab (cards + charts + exports, no table)
 import NowTab from "./NowTab";
 
-// PAST: your existing view
+// PAST: your existing view (renamed/labelled as HISTORICAL in the UI)
 import PastTab from "./PastTab";
 
 // FUTURE: your LSTM UI
@@ -50,9 +50,9 @@ export default function DataExplorer() {
             aria-label="Data Explorer Tabs"
             sx={{ flex: 1 }}
           >
-            <Tab label="Present" {...a11yProps(0)} />
-            <Tab label="Past" {...a11yProps(1)} />
-            <Tab label="Future" {...a11yProps(2)} />
+            <Tab label="PRESENT" {...a11yProps(0)} />
+            <Tab label="HISTORICAL" {...a11yProps(1)} />
+            <Tab label="FUTURE" {...a11yProps(2)} />
           </Tabs>
           <Button size="small" variant="outlined" onClick={handleRefresh}>
             Refresh
@@ -75,16 +75,16 @@ export default function DataExplorer() {
         )}
       </Box>
 
-      {/* PAST */}
+      {/* HISTORICAL */}
       <Box
-        key={`past-${refreshKey}`}
+        key={`historical-${refreshKey}`}
         role="tabpanel"
         hidden={tab !== 1}
         id="data-panel-1"
         aria-labelledby="data-tab-1"
       >
         {tab === 1 && (
-          <Suspense fallback={<Box sx={{ p: 2 }}>Loading past…</Box>}>
+          <Suspense fallback={<Box sx={{ p: 2 }}>Loading historical…</Box>}>
             <PastTab />
           </Suspense>
         )}
