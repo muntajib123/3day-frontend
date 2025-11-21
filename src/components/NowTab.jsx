@@ -10,20 +10,27 @@ import {
 } from "recharts";
 
 import { parseNoaa3Day, parseNoaaProbabilities } from "../utils/noaa3dayParser";
-import { fetchPresentForecast } from "../api"; // <-- use api helper that talks to API_BASE
+import { fetchPresentForecast } from "../api"; // uses API_BASE from environment
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
 const fmtDayUTC = (iso) => new Date(iso).toLocaleString([], { day: "2-digit", month: "short" });
-const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + Number(b || 0), 0) / arr.length : 0);
+const avg = (arr) => (arr && arr.length ? arr.reduce((a, b) => a + Number(b || 0), 0) / arr.length : 0);
 const fmtKp = (n) => (Number.isFinite(n) ? Number(n).toFixed(2) : "—");
 
 function kpToAp(kp) {
   const table = [0, 4, 7, 15, 27, 48, 80, 132, 207, 400];
   if (!isFinite(kp) || kp <= 0) return 0;
   if (kp >= 9) return 400;
-  const lo = Math.floor(kp), hi = lo + 1, t = kp - lo;
+  const lo = Math.floor(kp), hi = Math.min(lo + 1, table.length - 1), t = kp - lo;
   return Math.round(table[lo] + (table[hi] - table[lo]) * t);
+}
+
+function toMapLike(x) {
+  if (!x) return new Map();
+  if (x instanceof Map) return x;
+  if (typeof x === "object") return new Map(Object.entries(x));
+  return new Map();
 }
 
 export default function NowTab() {
@@ -39,32 +46,55 @@ export default function NowTab() {
     setLoading(true);
     setErr("");
     try {
-      // Use the backend helper — it returns JSON { text, fetched_at, source }
-      const payload = await fetchPresentForecast(); // fetchPresentForecast uses API_BASE from src/api.js
-      // If backend returns the full object with .text, extract it; otherwise assume payload is raw string
-      const txt = (payload && payload.text) ? payload.text : (typeof payload === "string" ? payload : "");
+      const payload = await fetchPresentForecast(); // { text, fetched_at, source }
+      const txt = (payload && payload.text) ? payload.text : (typeof payload === 'string' ? payload : "");
       if (!txt || typeof txt !== "string") {
         throw new Error("No NOAA present text returned");
       }
 
       // parse Kp breakdown and probabilities
       const kpParsed = parseNoaa3Day(txt || "");
-      const kpSer = (kpParsed.kpSeries || []).sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso));
-      setDaysISO(kpParsed.daysISO || []);
+      const rawKpSeries = Array.isArray(kpParsed.kpSeries) ? kpParsed.kpSeries : [];
+
+      // normalize kpSeries (ensure numbers and iso strings)
+      const kpSer = rawKpSeries
+        .map((pt) => ({ iso: String(pt.iso), kp: Number(pt.kp) }))
+        .filter((pt) => pt.iso && Number.isFinite(pt.kp))
+        .sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso));
+
+      // normalize daysISO to ISO YYYY-MM-DD
+      const rawDaysISO = Array.isArray(kpParsed.daysISO) ? kpParsed.daysISO : [];
+      const normDaysISO = rawDaysISO.map((d) => String(d).slice(0, 10));
+
+      setDaysISO(normDaysISO);
       setKpSeries(kpSer);
-      setIssued(kpParsed?.meta?.issued || (payload && payload.fetched_at) || "");
 
-      const fallbackYear =
-        (kpParsed?.meta?.issued && (kpParsed.meta.issued.match(/(\d{4})/) || [])[1]) ||
-        new Date().getUTCFullYear();
+      // issued may exist in parsed meta or backend payload fetched_at
+      setIssued((kpParsed && kpParsed.meta && kpParsed.meta.issued) || (payload && payload.fetched_at) || "");
 
-      const prob = parseNoaaProbabilities(txt, fallbackYear, kpParsed.daysISO);
-      setSolarByDay(prob.solarByDay || new Map());
-      setRadioByDay(prob.radioByDay || new Map());
+      // parse probabilities (solar / radio)
+      const fallbackYear = (kpParsed && kpParsed.meta && (kpParsed.meta.issued || "").match(/(\d{4})/))
+        ? Number((kpParsed.meta.issued.match(/(\d{4})/) || [])[1])
+        : new Date().getUTCFullYear();
+
+      const prob = parseNoaaProbabilities(txt, fallbackYear, normDaysISO);
+
+      const sMap = toMapLike(prob.solarByDay);
+      const rMap = toMapLike(prob.radioByDay);
+      setSolarByDay(sMap);
+      setRadioByDay(rMap);
+
+      // Clear any previous error
+      setErr("");
+
+      // Quick debug logging (will be stripped/removed later if not needed)
+      // eslint-disable-next-line no-console
+      console.info("NowTab: loaded present text, days:", normDaysISO, "kpSeries rows:", kpSer.length);
+
     } catch (e) {
-      console.error("Failed to load NOAA present text or parse it:", e);
+      // eslint-disable-next-line no-console
+      console.error("NowTab load failed:", e);
       setErr("Failed to load live 3-day forecast.");
-      // leave UI in 'no data' state if necessary
       setDaysISO([]);
       setKpSeries([]);
       setSolarByDay(new Map());
@@ -78,14 +108,18 @@ export default function NowTab() {
 
   // ---- Cards (Kp avg + Ap + Solar/Radio)
   const dayCards = useMemo(() => {
-    if (!daysISO.length) return [];
+    if (!daysISO || !daysISO.length) return [];
     const byDayKp = new Map(daysISO.map((d) => [d, []]));
     kpSeries.forEach((pt) => {
-      const d = new Date(pt.iso);
-      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
-        d.getUTCDate()
-      ).padStart(2, "0")}`;
-      if (byDayKp.has(key)) byDayKp.get(key).push(pt.kp);
+      try {
+        const d = new Date(pt.iso);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+          d.getUTCDate()
+        ).padStart(2, "0")}`;
+        if (byDayKp.has(key)) byDayKp.get(key).push(pt.kp);
+      } catch (e) {
+        // ignore malformed rows
+      }
     });
 
     return daysISO.map((dayIso) => {
