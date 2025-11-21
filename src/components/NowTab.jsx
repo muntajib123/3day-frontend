@@ -10,9 +10,7 @@ import {
 } from "recharts";
 
 import { parseNoaa3Day, parseNoaaProbabilities } from "../utils/noaa3dayParser";
-
-// ✅ proxied URL (via src/setupProxy.js)
-const NOAA_3DAY_URL = "/noaa/text/3-day-forecast.txt";
+import { fetchPresentForecast } from "../api"; // <-- use api helper that talks to API_BASE
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
@@ -41,16 +39,20 @@ export default function NowTab() {
     setLoading(true);
     setErr("");
     try {
-      const txt = await fetch(NOAA_3DAY_URL).then((r) => {
-        if (!r.ok) throw new Error("3-day fetch failed");
-        return r.text();
-      });
+      // Use the backend helper — it returns JSON { text, fetched_at, source }
+      const payload = await fetchPresentForecast(); // fetchPresentForecast uses API_BASE from src/api.js
+      // If backend returns the full object with .text, extract it; otherwise assume payload is raw string
+      const txt = (payload && payload.text) ? payload.text : (typeof payload === "string" ? payload : "");
+      if (!txt || typeof txt !== "string") {
+        throw new Error("No NOAA present text returned");
+      }
 
-      const kpParsed = parseNoaa3Day(txt);
+      // parse Kp breakdown and probabilities
+      const kpParsed = parseNoaa3Day(txt || "");
       const kpSer = (kpParsed.kpSeries || []).sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso));
       setDaysISO(kpParsed.daysISO || []);
       setKpSeries(kpSer);
-      setIssued(kpParsed?.meta?.issued || "");
+      setIssued(kpParsed?.meta?.issued || (payload && payload.fetched_at) || "");
 
       const fallbackYear =
         (kpParsed?.meta?.issued && (kpParsed.meta.issued.match(/(\d{4})/) || [])[1]) ||
@@ -60,8 +62,13 @@ export default function NowTab() {
       setSolarByDay(prob.solarByDay || new Map());
       setRadioByDay(prob.radioByDay || new Map());
     } catch (e) {
-      console.error(e);
+      console.error("Failed to load NOAA present text or parse it:", e);
       setErr("Failed to load live 3-day forecast.");
+      // leave UI in 'no data' state if necessary
+      setDaysISO([]);
+      setKpSeries([]);
+      setSolarByDay(new Map());
+      setRadioByDay(new Map());
     } finally {
       setLoading(false);
     }
@@ -227,7 +234,7 @@ export default function NowTab() {
                     <YAxis domain={[0, 9]} label={{ value: "Kp", angle: -90, position: "insideLeft" }} />
                     <RcTooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="kp" stroke="#1f77b4" dot={false} />
+                    <Line type="monotone" dataKey="kp" dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </Box>
@@ -245,7 +252,7 @@ export default function NowTab() {
                       <YAxis domain={[0, 100]} label={{ value: "%", angle: -90, position: "insideLeft" }} />
                       <RcTooltip />
                       <Legend />
-                      <Line type="monotone" dataKey="solar" stroke="#2ca02c" dot />
+                      <Line type="monotone" dataKey="solar" dot />
                     </LineChart>
                   </ResponsiveContainer>
                 </Box>
@@ -264,7 +271,7 @@ export default function NowTab() {
                       <YAxis domain={[0, 100]} label={{ value: "%", angle: -90, position: "insideLeft" }} />
                       <RcTooltip />
                       <Legend />
-                      <Line type="monotone" dataKey="radio" stroke="#d62728" dot />
+                      <Line type="monotone" dataKey="radio" dot />
                     </LineChart>
                   </ResponsiveContainer>
                 </Box>
